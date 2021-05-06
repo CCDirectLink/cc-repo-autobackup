@@ -1,7 +1,7 @@
-#!/usr/bin/env bash
+#!/usr/bin/env zsh
 
 # http://redsymbol.net/articles/unofficial-bash-strict-mode/
-set -euo pipefail
+setopt ERR_EXIT ERR_RETURN NO_UNSET PIPE_FAIL
 
 ansi_reset="$(tput sgr0 || true)"
 ansi_red="$(tput setaf 1 || true)"
@@ -31,24 +31,24 @@ log_info "fetching $PROJECTS_DB_URL"
 curl "$PROJECTS_DB_URL" --output "$PROJECTS_DB_FILE"
 
 log_info "reading $PROJECTS_DB_FILE"
+projects=()
 projects_db_version="$(jq '.version' $PROJECTS_DB_FILE)"
 if [[ "$projects_db_version" == 1 ]]; then
   # https://unix.stackexchange.com/a/136216/411555
-  readarray -t projects < <(
+  projects+=("${(@f)$(
     jq --compact-output '(.people[], .organizations[] | select(.name != "CCDirectLink")).projects[].home' "$PROJECTS_DB_FILE"
-  )
+  )}")
 else
   log_error "unsupported $PROJECTS_DB_FILE version '$projects_db_version'"
 fi
 
 add_github_org_repos() {
   local org_name="$1"
-  local api_url="${GITHUB_API_ORG_REPOS_URL/'{}'/"${org_name}"}"
+  local api_url="${GITHUB_API_ORG_REPOS_URL/\{\}/"${org_name}"}"
   log_info "fetching repos from $api_url"
-  readarray -t -O "${#projects[@]}" projects < <(
-    curl "$api_url" | jq --compact-output --arg org_name "$org_name" \
-      '.[] | { type: "github", user: $org_name, repo: .name }'
-  )
+  projects+=("${(@f)$(
+    curl "$api_url" | jq --compact-output --arg org_name "$org_name" '.[] | { type: "github", user: $org_name, repo: .name }'
+  )}")
 }
 
 add_github_org_repos CCDirectLink
@@ -56,11 +56,12 @@ add_github_org_repos ccdirectlink3
 
 cd "$BACKUP_DIR"
 
-for (( i = 0, len = ${#projects[@]}; i < len; i++ )); do
+for (( i = 1, len = ${#projects[@]}; i <= len; i++ )); do
   project="${projects[$i]}"
-  log_info "($((i + 1))/${len}) ${project}"
+  log_info "(${i}/${len}) ${project}"
 
-  {
+  # An anonymous function is used to force ERR_RETURN to become effective.
+  () {
     project_type="$(jq --raw-output '.type' <<< "$project")"
 
     case "$project_type" in
